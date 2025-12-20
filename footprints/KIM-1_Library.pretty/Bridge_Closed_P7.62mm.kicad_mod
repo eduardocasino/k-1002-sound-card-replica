@@ -1,0 +1,95 @@
+(footprint "Bridge_Closed_P7.62mm"
+	(version 20241229)
+	(generator "pcbnew")
+	(generator_version "9.0")
+	(layer "F.Cu")
+	(descr "Bridge, Closed, 7.62mm Pitch")
+	(tags "Bridge Open pitch 7.62mm")
+	(property "Reference" "REF**"
+		(at 6.35 -2.72 0)
+		(layer "F.SilkS")
+		(hide yes)
+		(uuid "783a32a7-e044-4cd0-8962-d77c170bbe53")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Value" "Bridge_Closed_P7.62mm"
+		(at 6.35 2.72 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "7ce73ff4-f3bb-4322-a0f1-64ca71fac57a")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "171973ef-0523-4406-b525-35199cea5703")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "d38c4bff-e238-47bd-a017-6a9c310bd95c")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(attr through_hole exclude_from_bom)
+	(fp_line
+		(start 0.8 0)
+		(end 6.82 0)
+		(stroke
+			(width 0.4)
+			(type solid)
+		)
+		(layer "F.Cu")
+		(uuid "dc92e128-12f1-40b9-bcf0-3230d3929abf")
+	)
+	(fp_text user "${REFERENCE}"
+		(at 3.74 1.7 0)
+		(layer "F.Fab")
+		(uuid "39357c13-22ed-4925-99ec-f79a91e7b84c")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(pad "1" thru_hole oval
+		(at 0 0)
+		(size 1.6 1.6)
+		(drill 0.8)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(uuid "b2662dc0-0632-4ab5-bc15-1c40fa245bfe")
+	)
+	(pad "2" thru_hole oval
+		(at 7.62 0)
+		(size 1.6 1.6)
+		(drill 0.8)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(uuid "43fb2c1a-63b4-4710-90ad-ed51ac8bc312")
+	)
+	(embedded_fonts no)
+)
