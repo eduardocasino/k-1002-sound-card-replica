@@ -526,7 +526,7 @@
       "specctra_dsn": "",
       "step": "",
       "svg": "",
-      "vrml": "../app-mtu-adapter/3dmodels/K-1002-sound-card-replica.wrl"
+      "vrml": "../adapter/3dmodels/K-1002-sound-card-replica.wrl"
     },
     "page_layout_descr_file": ""
   },
