@@ -1,0 +1,451 @@
+
+                              .PAGE  'DOCUMENTATION'
+    3                ;        COPYRIGHT 1977 BY MICRO TECHNOLOGY UNLIMITED, BOX 4596,
+    4                ;        MANCHESTER, NEW HAMPSHIRE 03108
+    5                ;        PROGRAM WRITTEN BY HAL CHAMBERLIN
+    6
+    7                ;        THIS PROGRAM PLAYS MUSIC IN 4-PART HARMONY ON THE KIM-1 OR
+    8                ;        OTHER 6502 BASED SYSTEM USING AN 8-BIT UNSIGNED
+    9                ;        DIGITAL-TO-ANALOG CONVERTER CONNECTED TO AN OUTPUT PORT.  TUNED
+   10                ;        FOR SYSTEMS WITH A 1 MHZ CRYSTAL CLOCK.  DOES NOT USE THE ROR
+   11                ;        INSTRUCTION.
+   12
+   13                ;        SONG TABLE IS AT "SONG" (HEX 0200)
+   14                ;        ENTRY POINT IS AT "PLAY" (HEX 0100)
+   15
+   16                ;        IN THE SONG TABLE EACH MUSICAL EVENT CONSISTS OF 5 BYTES.  THE
+   17                ;        FIRST BYTE IS THE DURATION OF THE EVENT IN UNITS ACCORDING TO
+   18                ;        THE VALUE OF "TEMPO".  FOR A TYPICAL TEMPO SETTING OF 109
+   19                ;        (DECIMAL) A DURATION OF 48 WOULD CORRESPOND TO A QUARTER NOTE
+   20                ;        AT APPROXIMATELY 100 BEATS PER MINUTE.
+   21                ;        IF THE FIRST BYTE IS 0 - 4, THEN A CONTROL FUNCTION IS
+   22                ;        IS PERFORMED AS FOLLOWS:
+   23                ;        0      END OF SONG, CONTROL IS RETURNED TO THE KIM MONITOR.
+   24                ;        1      END OF SONG TABLE SEGMENT, NEXT 2 BYTES CONTAIN ADDRESS
+   25                ;               OF BEGINNING OF NEXT SEGMENT.
+   26                ;        2      "REFRAIN DESIGNATOR" (JUMP TO SUBROUTINE) THE CURRENT
+   27                ;               LOCATION IN THE SONG TABLE IS SAVED ON THE STACK AND THE
+   28                ;               NEXT 2 BYTES CONTAIN THE ADDRESS OF THE REFRAIN.
+   29                ;        3      END OF REFRAIN (RETURN FROM SUBROUTINE) PLAYING RESUMES
+   30                ;               AT THE LOCATION IN THE SONG TABLE SAVED BY THE LAST
+   31                ;               REFRAIN DESIGNATOR.
+   32                ;        NOTE:  MUSICAL SUBROUTINES MAY BE STACKED AS DEEP AS DESIRED
+   33                ;               SUBJECT ONLY TO THE AMOUNT OF STACK AREA AVAILABLE.
+   34
+   35                ;        THE NEXT 4 BYTES ARE NOTE ID NUMBERS FOR THE 4 SIMULTANEOUS
+   36                ;        VOICES WITH VOICE 1 FIRST.  SEE THE NOTE FREQUENCY TABLE FOR
+   37                ;        CORRESPONDANCE BETWEEN NUMBERS AND ACTUAL NOTES.
+   38
+   39                ;        THE WAVEFORM TABLE CONTAINS A TABULATION OF THE WAVEFORM TO BE
+   40                ;        PLAYED BY A VOICE.  WITH A BASIC KIM-1 (1.1K OF MEMORY) ALL
+   41                ;        VOICES MUST USE THE SAME WAVEFORM.  FOR LARGER MEMORY
+   42                ;        CONFIGURATIONS EACH VOICE MAY USE A DIFFERENT WAVEFORM TABLE.
+   43                ;        WHEN USING A DIFFERENT WAVEFORM TABLE FOR VOICE 1 AS AN
+   44                ;        EXAMPLE, THE PAGE NUMBER OF THE TABLE MUST BE ENTERED AT
+   45                ;        V1PT+2; LIKEWISE AT V2PT+2 FOR VOICE 2, ETC.   THE AMPLITUDE
+   46                ;        OF THE WAVEFORM TABULATED MUST BE SUCH THAT WHEN THE 4 VOICES
+   47                ;        ARE ADDED UP, THERE IS NO POSSIBILITY OF OVERFLOW.  ALSO, THE
+   48                ;        WAVEFORM SAMPLE VALUES ARE UNSIGNED, POSITIVE NUMBERS.  THE NO
+   49                ;        OVERFLOW PROVISION IS SATISFIED IF THE LARGEST SAMPLE VALUE IN
+   50                ;        A WAVEFORM TABLE IS 3F (HEX) OR LESS.  HOWEVER SOME VOICES MAY
+   51                ;        BE MADE LOUDER THAN OTHERS BY ADJUSTING THE WAVEFORM
+   52                ;        AMPLITUDES.  NOTE THAT MAXIMUM PERMISSABLE WAVEFORM AMPLITUDE
+   53                ;        SHOULD ALWAYS BE USED TO MAXIMIZE SIGNAL-TO-NOISE RATIO.
+   54
+                              .PAGE  'EQUATES AND BASE PAGE STORAGE'
+   55
+   56 0000                    .=     0            ; ORG AT PAGE 0 LOCATION 0
+   57
+   58 1700           DAC      =      X'1700       ; OUTPUT PORT ADDRESS WITH DAC
+   59 1701           DACDIR   =      X'1701       ; DATA DRIECTION REGISTER FOR DAC PORT
+   60 1780           AUXRAM   =      X'1780       ; ADDRESS OF EXTRA 128 BYTES OF RAM IN 6530
+   61 1C22           KIMMON   =      X'1C22       ; ENTRY POINT TO KIM KEYBOARD MONITOR
+   62
+   63 0000 00        V1PT:    .BYTE  0            ; VOICE 1 WAVE POINTER, FRACTIONAL PART
+   64 0001 00                 .BYTE  0            ; INTEGER PART
+   65 0002 03                 .BYTE  WAV1TB/256   ; WAVEFORM TABLE PAGE ADDRESS FOR VOICE 1
+   66 0003 00        V2PT:    .BYTE  0            ; SAME AS ABOVE FOR VOICE 2
+   67 0004 00                 .BYTE  0
+   68 0005 03                 .BYTE  WAV2TB/256
+   69 0006 00        V3PT:    .BYTE  0            ; SAME AS ABOVE FOR VOICE 3
+   70 0007 00                 .BYTE  0
+   71 0008 03                 .BYTE  WAV3TB/256
+   72 0009 00        V4PT:    .BYTE  0            ; SAME AS ABOVE FOR VOICE 4
+   73 000A 00                 .BYTE  0
+   74 000B 03                 .BYTE  WAV4TB/256
+   75
+   76 000C 0000      V1IN:    .WORD  0            ; VOICE 1 INCREMENT (FREQUENCY PARAMETER)
+   77 000E 0000      V2IN:    .WORD  0            ; VOICE 2
+   78 0010 0000      V3IN:    .WORD  0            ; VOICE 3
+   79 0012 0000      V4IN:    .WORD  0            ; VOICE 4
+   80
+   81 0014 0002      SONGA:   .WORD  SONG         ; ADDRESS OF SONG
+   82 0016 B6        TEMPO:   .BYTE  182          ; TEMPO CONTROL VALUE, TYPICAL VALUE FOR
+   83                                             ; 4:4 TIME, 60 BEATS PER MINUTE, DURATION
+   84                                             ; BYTE = 48 (10) DESIGNATES A QUARTER NOTE
+   85
+   86 0017 00        DUR:     .BYTE  0            ; DURATION COUNTER
+   87 0018 0000      NOTES:   .WORD  0            ; NOTES POINTER
+   88 001A 0000      INCPT:   .WORD  0            ; POINTER FOR LOADING UP V1NT - V4NT
+   89 001C 0C00      INCA:    .WORD  V1IN         ; INITIAL VALUE OF INCPT
+   90
+                              .PAGE  'NOTE FREQUENCY TABLE'
+   91                ;        NOTE FREQUENCY TABLE FOR 8.772 KHZ SAMPLE RATE
+   92                ;        RANGE FROM C2 (65.41 HZ) TO C6 (1046.5 HZ)
+   93                ;                               ID  NOTE  FREQ.   INCR.
+   94 001E 0000      FRQTAB:  .BYTE  0,0          ;   0  SILENCE
+   95 0020 01E9               .BYTE  1,233        ;   2  C2    65.405  1.9089
+   96 0022 0206               .BYTE  2,6          ;   4  C2#   69.295  2.0224
+   97 0024 0225               .BYTE  2,37         ;   6  D2    73.415  2.1427
+   98 0026 0245               .BYTE  2,69         ;   8  D2#   77.783  2.2701
+   99 0028 0268               .BYTE  2,104        ;   A  E2    82.408  2.4051
+  100 002A 028C               .BYTE  2,140        ;   C  F2    87.308  2.5481
+  101 002C 02B3               .BYTE  2,179        ;   E  F2#   92.498  2.6996
+  102 002E 02DC               .BYTE  2,220        ;  10  G2    97.998  2.8601
+  103 0030 0308               .BYTE  3,8          ;  12  G2#   103.83  3.0302
+  104 0032 0336               .BYTE  3,54         ;  14  A2    110.00  3.2104
+  105 0034 0367               .BYTE  3,103        ;  16  A2#   116.54  3.4013
+  106 0036 039A               .BYTE  3,154        ;  18  B2    123.47  3.6035
+  107 0038 03D1               .BYTE  3,209        ;  1A  C3    130.81  3.8178
+  108 003A 040B               .BYTE  4,11         ;  1C  C3#   138.59  4.0448
+  109 003C 0449               .BYTE  4,73         ;  1E  D3    146.83  4.2854
+  110 003E 048A               .BYTE  4,138        ;  20  D3#   155.57  4.5402
+  111 0040 04CF               .BYTE  4,207        ;  22  E3    164.82  4.8102
+  112 0042 0519               .BYTE  5,25         ;  24  F3    174.62  5.0962
+  113 0044 0566               .BYTE  5,102        ;  26  F3#   185.00  5.3992
+  114 0046 05B8               .BYTE  5,184        ;  28  G3    196.00  5.7203
+  115 0048 060F               .BYTE  6,15         ;  2A  G3#   207.65  6.0604
+  116 004A 066C               .BYTE  6,108        ;  2C  A3    220.00  6.4208
+  117 004C 06CD               .BYTE  6,205        ;  2E  A3#   233.08  6.8026
+  118 004E 0735               .BYTE  7,53         ;  30  B3    246.94  7.2071
+  119 0050 07A3               .BYTE  7,163        ;  32  C4    261.62  7.6356
+  120 0052 0817               .BYTE  8,23         ;  34  C4#   277.18  8.0897
+  121 0054 0892               .BYTE  8,146        ;  36  D4    293.66  8.5707
+  122 0056 0915               .BYTE  9,21         ;  38  D4#   311.13  9.0804
+  123 0058 099F               .BYTE  9,159        ;  3A  E4    329.63  9.6203
+  124 005A 0A31               .BYTE  10,49        ;  3C  F4    349.23  10.1924
+  125 005C 0ACC               .BYTE  10,204       ;  3E  F4#   369.99  10.7984
+  126 005E 0B71               .BYTE  11,113       ;  40  G4    391.99  11.4405
+  127 0060 0C1F               .BYTE  12,31        ;  42  G4#   415.30  12.1208
+  128 0062 0CD7               .BYTE  12,215       ;  44  A4    440.00  12.8416
+  129 0064 0D9B               .BYTE  13,155       ;  46  A4#   466.16  13.6052
+  130 0066 0E6A               .BYTE  14,106       ;  48  B4    493.88  14.4142
+  131 0068 0F45               .BYTE  15,69        ;  4A  C5    523.24  15.2713
+  132 006A 102E               .BYTE  16,46        ;  4C  C5#   554.36  16.1794
+  133 006C 1124               .BYTE  17,36        ;  4E  D5    587.32  17.1414
+  134 006E 1229               .BYTE  18,41        ;  50  DS#   622.26  18.1607
+  135 0070 133E               .BYTE  19,62        ;  52  E5    659.26  19.2406
+  136 0072 1462               .BYTE  20,98        ;  54  F5    698.46  20.3847
+  137 0074 1599               .BYTE  21,153       ;  56  F5#   739.98  21.5969
+  138 0076 16E2               .BYTE  22,226       ;  58  G5    783.98  22.8811
+  139 0078 183E               .BYTE  24,62        ;  5A  G5#   830.60  24.2417
+  140 007A 19AF               .BYTE  25,175       ;  5C  A5    880.00  25.6831
+  141 007C 1B36               .BYTE  27,54        ;  5E  A5#   932.32  27.2103
+  142 007E 1CD4               .BYTE  28,212       ;  60  B5    987.76  28.8283
+  143 0080 1E8B               .BYTE  30,139       ;  62  C6    1046.5  30.5426
+  144
+  145 0082           P0END    =      .            ; DEFINE BEGINNING ADDRESS FOR SECOND PART
+  146                                             ; OF SONG TABLE
+  147
+                              .PAGE  'SONG TABLE INTERPRETER ROUTINE'
+  148 0082                    .=     X'100        ; START PROGRAM CODE AT LOCATION 0100
+  149
+  150                ;        MAIN MUSIC PLAYING PROGRAM
+  151
+  152 0100 A9FF      MUSIC:   LDA    #X'FF        ; SET PERIPHERAL A DATA DIRECTION
+  153 0102 8D0117             STA    DACDIR       ; REGISTER TO OUTPUT
+  154 0105 D8                 CLD                 ; INSURE BINARY ARITHMETIC
+  155 0106 A514               LDA    SONGA        ; INITIALIZE NOTES POINTER
+  156 0108 8518               STA    NOTES        ; TO BEGINNING OF SONG
+  157 010A A515               LDA    SONGA+1
+  158 010C 8519               STA    NOTES+1
+  159 010E A000      MUSIC1:  LDY    #0           ; SET UP TO TRANSLATE 4 NOTE ID NUMBERS
+  160 0110 A51C               LDA    INCA         ; INTO FREQUENCY DETERMINING WAVEFORM TABLE
+  161 0112 851A               STA    INCPT        ; INCREMENTS AND STORE IN V1IN - V4IN
+  162 0114 B118               LDA    (NOTES),Y    ; GET DURATION FIRST
+  163 0116 F02D               BEQ    ENDSNG       ; BRANCH IF END OF SONG
+  164 0118 C902               CMP    #2           ; TEST FOR OTHER CONTROL FUNCTIONS
+  165 011A F03B               BEQ    RFNCAL       ; BRANCH IF REFRAIN CALL
+  166 011C 902A               BCC    NXTSEG       ; BRANCH IF END OF TABLE SEGMENT
+  167 011E C903               CMP    #3
+  168 0120 F03E               BEQ    RFNRET       ; BRANCH IF RETURN FROM REFRAIN
+  169 0122 8517               STA    DUR          ; OTHERWISE SAVE DURATION IN DUR
+  170 0124 207201    MUSIC2:  JSR    DINNOT       ; DOUBLE INCREMENT NOTES TO POINT TO THE
+  171                                             ; NOTE ID OF THE FIRST VOICE
+  172 0127 B118      MUSIC3:  LDA    (NOTES),Y    ; GET A NOTE ID NUMBER
+  173 0129 AA                 TAX                 ; INTO INDEX X
+  174 012A B51F               LDA    FRQTAB+1,X   ; GET LOW BYTE OF CORRESPONDING FREQUENCY
+  175 012C 911A               STA    (INCPT),Y    ; STORE INTO LOW BYTE OF VOICE INCREMENT
+  176 012E E61A               INC    INCPT        ; INDEX TO HIGH BYTE
+  177 0130 B51E               LDA    FRQTAB,X     ; GET HIGH BYTE OF FREQUENCY
+  178 0132 911A               STA    (INCPT),Y    ; STORE INTO HIGH BYTE OF VOICE INCREMENT
+  179 0134 207201             JSR    DINNOT       ; DOUBLE INCREMENT NOTES TO POINT TO THE
+  180                                             ; NOTE ID OF THE NEXT VOICE
+  181 0137 E61A               INC    INCPT        ; INDEX TO NEXT VOICE INCREMENT
+  182 0139 A51A               LDA    INCPT        ; TEST IF 4 VOICE INCREMENTS DONE
+  183 013B C914               CMP    #V4IN+2
+  184 013D D0E8               BNE    MUSIC3       ; LOOP IF NOT
+  185 013F 207901             JSR    PLAY         ; PLAY THIS GROUP OF NOTES
+  186 0142 4C0E01             JMP    MUSIC1       ; GO LOAD UP NEXT SET OF NOTES
+  187
+  188 0145 4C221C    ENDSNG:  JMP    KIMMON       ; END OF SONG, RETURN TO MONITOR
+  189
+  190 0148 C8        NXTSEG:  INY                 ; END OF SEGMENT, NEXT TWO BYTES POINT TO
+  191 0149 B118               LDA    (NOTES),Y    ; BEGINNING OF THE NEXT SEGMENT
+  192 014B 48                 PHA
+  193 014C C8                 INY                 ; GET BOTH SEGMENT ADDRESS BYTES
+  194 014D B118               LDA    (NOTES),Y
+  195 014F 8519               STA    NOTES+1      ; THEN STORE IN NOTES POINTER
+  196 0151 68                 PLA
+  197 0152 8518               STA    NOTES
+  198 0154 4C0E01             JMP    MUSIC1       ; GO START INTERPRETING NEW SEGMENT
+  199
+  200 0157 A518      RFNCAL:  LDA    NOTES        ; REFRAIN CALL, SAVE CURRENT VALUE OF NOTES
+  201 0159 48                 PHA                 ; ON THE STACK
+  202 015A A519               LDA    NOTES+1
+  203 015C 48                 PHA
+  204 015D 4C4801             JMP    NXTSEG       ; GO INTERPRET NEXT TWO ADDRESS BYTES
+  205
+  206 0160 68        RFNRET:  PLA                 ; REFRAIN RETURN, RESTORE SAVED VALUE OF
+  207 0161 8519               STA    NOTES+1      ; NOTES
+  208 0163 68                 PLA
+  209 0164 8518               STA    NOTES
+  210 0166 207201             JSR    DINNOT       ; BUMP UP NOTES BY THREE SINCE IT WAS SAVED
+  211 0169 207201             JSR    DINNOT       ; UNINCREMENTED
+  212 016C 207201             JSR    DINNOT
+  213 016F 4C0E01             JMP    MUSIC1       ; GO INTERPRET NEXT EVENT
+  214
+  215 0172 E618      DINNOT:  INC    NOTES        ; DOUBLE INCREMENT NOTES POINTER SUBROUTINE
+  216 0174 D002               BNE    DINN1
+  217 0176 E619               INC    NOTES+1
+  218 0178 60        DINN1:   RTS
+  219
+                              .PAGE  'SOUND GENERATION SUBROUTINE'
+  220
+  221                ;        4 VOICE PLAY SUBROUTINE
+  222                ;        ENTER WITH VARIOUS TABLE POINTERS ALREADY SET UP
+  223                ;        LOOPS TEMPO*DUR TIMES
+  224
+  225 0179 A000      PLAY:    LDY    #0           ; SET Y TO ZERO FOR STRAIGHT INDIRECT
+  226 017B A616               LDX    TEMPO        ; SET X TO TEMPO COUNT
+  227                                             ; COMPUTE AND OUTPUT A COMPOSITE SAMPLE
+  228 017D 18        PLAY1:   CLC                 ; CLEAR CARRY
+  229 017E B101               LDA    (V1PT+1),Y   ; ADD UP 4 VOICE SAMPLES
+  230 0180 7104               ADC    (V2PT+1),Y   ; USING INDIRECT ADDRESSING THROUGH VOICE
+  231 0182 7107               ADC    (V3PT+1),Y   ; POINTERS INTO WAVEFORM TABLES
+  232 0184 710A               ADC    (V4PT+1),Y   ; STRAIGHT INDIRECT WHEN Y INDEX = 0
+  233 0186 8D0017             STA    X'1700       ; SEND SUM TO DIGITAL-TO-ANALOG CONVERTER
+  234 0189 A500               LDA    V1PT         ; ADD INCREMENTS TO POINTERS FOR
+  235 018B 650C               ADC    V1IN         ; THE 4 VOICES
+  236 018D 8500               STA    V1PT         ; FIRST FRACTIONAL PART
+  237 018F A501               LDA    V1PT+1
+  238 0191 650D               ADC    V1IN+1
+  239 0193 8501               STA    V1PT+1       ; THEN INTEGER PART
+  240 0195 A503               LDA    V2PT         ; VOICE 2
+  241 0197 650E               ADC    V2IN
+  242 0199 8503               STA    V2PT
+  243 019B A504               LDA    V2PT+1
+  244 0190 650F               ADC    V2IN+1
+  245 019F 8504               STA    V2PT+1
+  246 01A1 A506               LDA    V3PT         ; VOICE 3
+  247 01A3 6510               ADC    V3IN
+  248 01A5 8506               STA    V3PT
+  249 01A7 A507               LDA    V3PT+1
+  250 01A9 6511               ADC    V3IN+1
+  251 01AB 8507               STA    V3PT+1
+  252 01AD A509               LDA    V4PT         ; VOICE 4
+  253 01AF 6512               ADC    V4IN
+  254 01B1 8509               STA    V4PT
+  255 01B3 A50A               LDA    V4PT+1
+  256 01B5 6513               ADC    V4IN+1
+  257 01B7 850A               STA    V4PT+1
+  258 01B9 CA                 DEX                 ; DECREMENT & CHECK TEMPO COUNT
+  259 01BA D008               BNE    TIMWAS       ; BRANCH TO TIME WASTE IF NOT RUN OUT
+  260 01BC C617               DEC    DUR          ; DECREMENT & CHECK DURATION COUNTER
+  261 01BE F00C               BEQ    ENDNOT       ; JUMP OUT IF END OF NOTE
+  262 01C0 A616               LDX    TEMPO        ; RESTORE TEMPO COUNT
+  263 01C2 D0B9               BNE    PLAY1        ; CONTINUE PLAYING
+  264 01C4 D000      TIMWAS:  BNE    TMWS1        ; 3  WASTE 12 STATES
+  265 01C6 D000      TMWS1:   BNE    TMWS2        ; 3
+  266 01C8 D000      TMWS2:   BNE    TMWS3        ; 3
+  267 01CA D0B1      TMWS3:   BNE    PLAY1        ; 3  CONTINUE PLAYING
+  268 01CC 60        ENDNOT:  RTS                 ; RETURN
+  269                                             ; TOTAL LOOP TIME = 114 STATES = 8770 HZ
+  270
+  271 01CD           P1END    =      .            ; DEFINE BEGINNING ADDRESS FOR THIRD PART
+  272                                             ; OF SONG TABLE
+  273
+                              .PAGE  'SONG TABLE'
+  274                ;        SONG TABLE
+  275
+  276 01CD                    .=     X'200        ; START SONG AT 0200
+  277
+  278                ;        SONG TABLE FOR "EXODUS"
+  279                ;        DURATION COUNT = 48 FOR QUARTER NOTE
+  280
+  281                                                          ; DUR  V1   V2   V3   V4
+  282 0200 02        SONG:    .BYTE  2                         ; CALL THE MUSICAL SUBROUTINE
+  283 0201 8200               .WORD  SUB1
+  284 0203 0C22323A           .BYTE  X'0C,X'22,X'32,X'3A,X'3C  ; 1/16 E3   C4   E4   F4
+  285 0208 1828323A           .BYTE  X'18,X'28,X'32,X'3A,X'40  ; 1/8  G3   C4   E4   G4
+  286 020D 1828323A           .BYTE  X'18,X'28,X'32,X'3A,X'44  ; 1/8  G3   C4   E4   A4
+  287 0212 241E2C36           .BYTE  X'24,X'1E,X'2C,X'36,X'3C  ; 1/8. D3   A3   D4   F4
+  288 0217 0C1E2C00           .BYTE  X'0C,X'1E,X'2C,X'00,X'36  ; 1/16 D3   A3        D4
+  289 021C 30222C34           .BYTE  X'30,X'22,X'2C,X'34,X'3A  ; 1/4  E3   A3   C4#  E4
+  290 0221 90142C34           .BYTE  X'90,X'14,X'2C,X'34,X'3A  ; 1/2. A2   A3   C4#  E4
+  291 0226 02                 .BYTE  2                         ; CALL THE SUBROUTINE AGAIN
+  292 0227 8200               .WORD  SUB1
+  293 0229 0C22323A           .BYTE  X'0C,X'22,X'32,X'3A,X'40  ; 1/16 C3   C4   E4   G4
+  294 022E 18242E36           .BYTE  X'18,X'24,X'2E,X'36,X'3C  ; 1/8  F3   B3@  D4   F4
+  295 0233 18242E36           .BYTE  X'18,X'24,X'2E,X'36,X'40  ; 1/8  F3   B3@  D4   G4
+  296 0238 241A2832           .BYTE  X'24,X'1A,X'28,X'32,X'3A  ; 1/8. C3   G3   C4   E4
+  297 023D 0C000000           .BYTE  X'0C,X'00,X'00,X'00,X'4A  ; 1/16                C5
+  298 0242 18063644           .BYTE  X'18,X'06,X'36,X'44,X'4E  ; 1/8  D2   D4   A4   D5
+  299 0247 18143644           .BYTE  X'18,X'14,X'36,X'44,X'4E  ; 1/8  A2   D4   A4   D5
+  300 024C 181E3644           .BYTE  X'18,X'1E,X'36,X'44,X'4E  ; 1/8  D3   D4   A4   D5
+  301 0251 18223644           .BYTE  X'18,X'22,X'36,X'44,X'4E  ; 1/8  E3   D4   A4   D5
+  302 0256 30243644           .BYTE  X'30,X'24,X'36,X'44,X'4E  ; 1/4  F3   D4   A4   D5
+  303 025B 30243644           .BYTE  X'30,X'24,X'36,X'44,X'4E  ; 1/4  F3   D4   A4   D5
+  304 0260 0C323A44           .BYTE  X'0C,X'32,X'3A,X'44,X'4A  ; 1/16 C4   E4   A4   C5
+  305 0265 0C323A00           .BYTE  X'0C,X'32,X'3A,X'00,X'4E  ; 1/16 C4   E4        D5
+  306 026A 0C323A00           .BYTE  X'0C,X'32,X'3A,X'00,X'4A  ; 1/16 C4   E4        C5
+  307 026F 0C323A00           .BYTE  X'0C,X'32,X'3A,X'00,X'44  ; 1/16 C4   E4        A4
+  308 0274 30283240           .BYTE  X'30,X'28,X'32,X'40,X'4A  ; 1/4  G3   C4   G4   C5
+  309 0279 30143240           .BYTE  X'30,X'14,X'32,X'40,X'4A  ; 1/4  A2   C4   G4   C5
+  310 027E 182C3240           .BYTE  X'18,X'2C,X'32,X'40,X'4A  ; 1/8  A3   C4   G4   C5
+  311 0283 182C3240           .BYTE  X'18,X'2C,X'32,X'40,X'44  ; 1/8  A3   C4   G4   C5
+  312 0288 18263644           .BYTE  X'18,X'26,X'36,X'44,X'4E  ; 1/8  F3#  D4   A4   D5
+  313 028D 18263A00           .BYTE  X'18,X'26,X'3A,X'00,X'52  ; 1/8  F3#  E4        E5
+  314 0292 4824404E           .BYTE  X'48,X'24,X'40,X'4E,X'58  ; 3/8  F3   G4   D5   G5
+  315 0297 18243C00           .BYTE  X'18,X'24,X'3C,X'00,X'54  ; 1/8  F3   F4        F5
+  316 029C 18243A00           .BYTE  X'18,X'24,X'3A,X'00,X'52  ; 1/8  F3   E4        E5
+  317 02A1 18243600           .BYTE  X'18,X'24,X'36,X'00,X'4E  ; 1/8  F3   D4        D5
+  318 02A6 0C323A44           .BYTE  X'0C,X'32,X'3A,X'44,X'4A  ; 1/16 C4   E4   A4   C5
+  319 02AB 0C323A00           .BYTE  X'0C,X'32,X'3A,X'00,X'4E  ; 1/16 C4   E4        D5
+  320 02B0 0C323A00           .BYTE  X'0C,X'32,X'3A,X'00,X'4A  ; 1/16 C4   E4        C5
+  321 02B5 0C323A00           .BYTE  X'0C,X'32,X'3A,X'00,X'44  ; 1/16 C4   E4        A4
+  322 02BA 30283240           .BYTE  X'30,X'28,X'32,X'40,X'4A  ; 1/4  G3   C4   G4   C5
+  323 02BF 30143240           .BYTE  X'30,X'14,X'32,X'40,X'4A  ; 1/4  A2   C4   G4   C5
+  324 02C4 182C3240           .BYTE  X'18,X'2C,X'32,X'40,X'4A  ; 1/8  A3   C4   G4   C5
+  325 02C9 182C3240           .BYTE  X'18,X'2C,X'32,X'40,X'44  ; 1/8  A3   C4   G4   A4
+  326 02CE 182C3E44           .BYTE  X'18,X'2C,X'3E,X'44,X'4E  ; 1/8  A3   F4#  A4   D5
+  327 02D3 182C3E44           .BYTE  X'18,X'2C,X'3E,X'44,X'52  ; 1/8  A3   F4#  A4   E5
+  328 02D8 483C4452           .BYTE  X'48,X'3C,X'44,X'52,X'5C  ; 1/4. F4   A4   E5   A5
+  329 02DD 18404400           .BYTE  X'18,X'40,X'44,X'00,X'58  ; 1/8  G4   A4        G5
+  330 02E2 243A4400           .BYTE  X'24,X'3A,X'44,X'00,X'52  ; 1/8. E4             E5
+  331 02E7 06364400           .BYTE  X'0C,X'36,X'44,X'00,X'4E  ; 1/16 D4   A4        D5
+  332 02EC 302C444C           .BYTE  X'30,X'2C,X'44,X'4C,X'52  ; 1/4  A3   A4   C5#  E5
+  333 02F1 6014444C           .BYTE  X'60,X'14,X'44,X'4C,X'52  ; 1/2, A2   A4   C5#  E5
+  334 02F6 00                 .BYTE  0                         ; END OF PIECE
+  335                ;        THIS IS A "MUSICAL SUBROUTINE" WHICH CONTAINS A PASSAGE THAT IS
+  336                ;        USED TWICE IN THE MAINLINE "EXODUS"
+  337
+  338 02F7                    .=     P0END                     ; START SUBROUTINE IN
+  339                                                          ; REMAINDER OF PAGE 0
+  340
+  341                                                          ; DUR  V1   V2   V3   V4
+  342 0082 1C002C00  SUB1:    .BYTE  X'1C,X'00,X'2C,X'00,X'00  ; 1/8.      A3
+  343 0087 4814242C           .BYTE  X'48,X'14,X'24,X'2C,X'36  ; 1/4. A2   F3   A3   D4
+  344 008C 18000000           .BYTE  X'18,X'00,X'00,X'00,X'44  ; 1/8                 A4
+  345 0091 481E3036           .BYTE  X'48,X'1E,X'30,X'36,X'40  ; 1/4. D3   B3   D4   G4
+  346 0096 18003600           .BYTE  X'18,X'00,X'36,X'00,X'00  ; 1/8       D4
+  347 009B 18242E36           .BYTE  X'18,X'24,X'2E,X'36,X'3C  ; 1/8  F3   B3@  D4   F4
+  348 00A0 18000000           .BYTE  X'18,X'00,X'00,X'00,X'40  ; 1/8                 G4
+  349 00A5 241A2832           .BYTE  X'24,X'1A,X'28,X'32,X'3A  ; 1/8. C3   G3   C4   E4
+  350 00AA 0C000000           .BYTE  X'0C,X'00,X'00,X'00,X'32  ; 1/16                C4
+  351 00AF 481E242C           .BYTE  X'48,X'1E,X'24,X'2C,X'36  ; 1/4. D3   F3   A3   D4
+  352 00B4 18000000           .BYTE  X'18,X'00,X'00,X'00,X'44  ; 1/8                 A4
+  353 00B9 1814323A           .BYTE  X'18,X'14,X'32,X'3A,X'4A  ; 1/8  A2   C4   E4   C5
+  354 00BE 1822323A           .BYTE  X'18,X'22,X'32,X'3A,X'4A  ; 1/8  E3   C4   E4   C5
+  355 00C3 182C323A           .BYTE  X'18,X'2C,X'32,X'3A,X'4A  ; 1/8  A3   C4   E4   C5
+  356 00C8 1800323A           .BYTE  X'18,X'00,X'32,X'3A,X'48  ; 1/8       C4   E4   B4
+  357 00CD 182C323C           .BYTE  X'18,X'2C,X'32,X'3C,X'4A  ; 1/8  A3   C4   F4   C5
+  358 00D2 182C323C           .BYTE  X'18,X'2C,X'32,X'3C,X'4E  ; 1/8  A3   C4   F4   D5
+  359 00D7 24283036           .BYTE  X'24,X'28,X'30,X'36,X'48  ; 1/8. G3   B3   D4   B4
+  360 00DC 0C283036           .BYTE  X'0C,X'28,X'30,X'36,X'40  ; 1/16 G3   B3   D4   G4
+  361 00E1 3022343A           .BYTE  X'30,X'22,X'34,X'3A,X'44  ; 1/4  E3   C4#  E4   A4
+  362 00E6 01                 .BYTE  1                         ; DEFINE BEGINNING OF NEXT
+  363 00E7 CD01               .WORD  P1END                     ; SEGMENT AT END OF PAGE 1
+  364 00E9                    .=     P1END
+  365 01CD 3014343A           .BYTE  X'30,X'14,X'34,X'3A,X'44  ; 1/4  A2   C4#  E4   A4
+  366 01D2 18140000           .BYTE  X'18,X'14,X'00,X'00,X'00  ; 1/8  A2
+  367 01D7 18144400           .BYTE  X'18,X'14,X'44,X'00,X'00  ; 1/8  A2   A4
+  368 01DC 1822323A           .BYTE  X'18,X'22,X'32,X'3A,X'4A  ; 1/8  E3   C4   E4   C5
+  369 01E1 01                 .BYTE  1                         ; DEFINE BEGINNING OF NEXT
+  370 01E2 8017               .WORD  AUXRAM                    ; SEGMENT IN 6530 RAM
+  371 01E4                    .=     AUXRAM
+  372 1780 1822323A           .BYTE  X'18,X'22,X'32,X'3A,X'52  ; 1/8  E3   C4   E4   E5
+  373 1785 241E362E           .BYTE  X'24,X'1E,X'36,X'2E,X'4E  ; 1/8. D3   D4   F4#  D5
+  374 178A 0C1E362E           .BYTE  X'0C,X'1E,X'36,X'2E,X'44  ; 1/16 D3   D4   F4#  A4
+  375 178F 181E362E           .BYTE  X'18,X'1E,X'36,X'2E,X'44  ; 1/8  D3   D4   F4#  A4
+  376 1794 181E2C2E           .BYTE  X'18,X'1E,X'2C,X'2E,X'44  ; 1/8  D3   A3   F4#  A4
+  377 1799 181E2C2E           .BYTE  X'18,X'1E,X'2C,X'2E,X'44  ; 1/8  D3   A3   F4#  A4
+  378 179E 181E2C2E           .BYTE  X'18,X'1E,X'2C,X'2E,X'4E  ; 1/8  D3   A3   F4#  D5
+  379 17A3 181E362C           .BYTE  X'18,X'1E,X'36,X'2C,X'44  ; 1/8  D3   D4   F4   A4
+  380 17A8 181E362C           .BYTE  X'18,X'1E,X'36,X'2C,X'4E  ; 1/8  D3   D4   F4   D5
+  381 17AD 2422323A           .BYTE  X'24,X'22,X'32,X'3A,X'52  ; 1/8. E3   C4   E4   E5
+  382 17B2 0C22323A           .BYTE  X'0C,X'22,X'32,X'3A,X'44  ; 1/16 E3   C4   E4   A4
+  383 17B7 1822323A           .BYTE  X'18,X'22,X'32,X'3A,X'44  ; 1/8  E3   C4   E4   A4
+  384 17BC 18222C3A           .BYTE  X'18,X'22,X'2C,X'3A,X'44  ; 1/8  E3   A3   E4   A4
+  385 17C1 30222C3A           .BYTE  X'30,X'22,X'2C,X'3A,X'44  ; 1/4  E3   A3   E4   A4
+  386 17C6 181A323A           .BYTE  X'18,X'1A,X'32,X'3A,X'40  ; 1/8  C3   C4   E4   G4
+  387 17CB 181A323A           .BYTE  X'18,X'1A,X'32,X'3A,X'44  ; 1/8  C3   C4   E4   A4
+  388 17D0 181E3640           .BYTE  X'18,X'1E,X'36,X'40,X'46  ; 1/8  D3   D4   G4   B4@
+  389 17D5 181E3640           .BYTE  X'18,X'1E,X'36,X'40,X'4A  ; 1/8  D3   D4   G4   C5
+  390 17DA 2422323A           .BYTE  X'24,X'22,X'32,X'3A,X'44  ; 1/8. E3   C4   E4   A4
+  391 17DF 03                 .BYTE  3                         ; RETURN
+  392
+                              .PAGE  'WAVEFORM TABLE'
+  393                ;        WAVEFORM TABLE
+  394                ;        EXACTLY ONE PAGE LONG ON A PAGE BOUNDARY
+  395                ;        MAXIMUM VALUE OF AN ENTRY IS 63 DECIMAL OR 3F HEX TO AVOID
+  396                ;        OVERFLOW WHEN 4 VOICES ARE ADDED UP
+  397
+  398 17E0                    .=     X'300        ; START WAVEFORM TABLE AT 0300
+  399
+  400 0300           WAV1TB =        .            ; VOICE 1 WAVEFORM TABLE
+  401 0300           WAV2TB =        .            ; VOICE 2 WAVEFORM TABLE
+  402 0300           WAV3TB =        .            ; VOICE 3 WAVEFORM TABLE
+  403 0300           WAV4TB =        .            ; VOICE 4 WAVEFORM TABLE
+  404                                             ; NOTE THAT ALL 4 VOICES USE THIS TABLE DUE
+  405                                             ; TO LACK OF RAM IN BASIC KIM-1
+  406
+  407                ;          FUNDAMENTAL AMPLITUDE  1.0 (REFERENCE)
+  408                ;          SECOND HARMONIC .5, IN PHASE WITH FUNDAMENTAL
+  409                ;          THIRD HARMONIC .5, 90 DEGREES LEADING PHASE
+  410
+  411 0300 33343536  WAVXTB:  .BYTE  X'33,X'34,X'35,X'36,X'36,X'37,X'38,X'39
+  412 0308 393A3A3B           .BYTE  X'39,X'3A,X'3A,X'3B,X'3B,X'3B,X'3C,X'3C
+  413 0310 3C3C3C3C           .BYTE  X'3C,X'3C,X'3C,X'3C,X'3C,X'3C,X'3C,X'3C
+  414 0318 3C3C3C3B           .BYTE  X'3C,X'3C,X'3C,X'3B,X'3B,X'3B,X'3B,X'3B
+  415 0320 3A3A3A3A           .BYTE  X'3A,X'3A,X'3A,X'3A,X'3A,X'3A,X'39,X'39
+  416 0328 39393939           .BYTE  X'39,X'39,X'39,X'39,X'39,X'39,X'39,X'39
+  417 0330 3A3A3A3A           .BYTE  X'3A,X'3A,X'3A,X'3A,X'3A,X'3B,X'3B,X'3B
+  418 0338 3B3C3C3C           .BYTE  X'3B,X'3C,X'3C,X'3C,X'3D,X'3D,X'3D,X'3D
+  419 0340 3E3E3E3E           .BYTE  X'3E,X'3E,X'3E,X'3E,X'3F,X'3F,X'3F,X'3F
+  420 0348 3F3F3F3F           .BYTE  X'3F,X'3F,X'3F,X'3F,X'3F,X'3F,X'3F,X'3F
+  421 0350 3E3E3E3D           .BYTE  X'3E,X'3E,X'3E,X'3D,X'3D,X'3C,X'3C,X'3B
+  422 0358 3B3A3938           .BYTE  X'3B,X'3A,X'39,X'38,X'38,X'37,X'36,X'35
+  423 0360 34333231           .BYTE  X'34,X'33,X'32,X'31,X'30,X'2F,X'2E,X'2D
+  424 0368 2C2B2A29           .BYTE  X'2C,X'2B,X'2A,X'29,X'28,X'27,X'26,X'25
+  425 0370 24232221           .BYTE  X'24,X'23,X'22,X'21,X'21,X'20,X'1F,X'1F
+  426 0378 1E1E1D1D           .BYTE  X'1E,X'1E,X'1D,X'1D,X'1D,X'1D,X'1C,X'1C
+  427 0380 1C1C1D1D           .BYTE  X'1C,X'1C,X'1D,X'1D,X'1D,X'1D,X'1D,X'1E
+  428 0388 1E1E1F20           .BYTE  X'1E,X'1F,X'1F,X'20,X'20,X'21,X'21,X'22
+  429 0390 23232424           .BYTE  X'23,X'23,X'24,X'24,X'25,X'26,X'26,X'27
+  430 0398 28282929           .BYTE  X'28,X'28,X'29,X'29,X'29,X'2A,X'2A,X'2B
+  431 03A0 2B2B2B2B           .BYTE  X'2B,X'2B,X'2B,X'2B,X'2B,X'2B,X'2B,X'2A
+  432 03A8 2A2A2929           .BYTE  X'2A,X'2A,X'29,X'29,X'28,X'27,X'27,X'26
+  433 03B0 25242322           .BYTE  X'25,X'24,X'23,X'22,X'21,X'20,X'1F,X'1D
+  434 03B8 1C1B1918           .BYTE  X'1C,X'1B,X'19,X'18,X'17,X'15,X'14,X'13
+  435 03C0 11100F0D           .BYTE  X'11,X'10,X'0F,X'0D,X'0C,X'0B,X'09,X'08
+  436 03C8 07060504           .BYTE  X'07,X'06,X'05,X'04,X'03,X'03,X'02,X'01
+  437 03D0 01000000           .BYTE  X'01,X'00,X'00,X'00,X'00,X'00,X'00,X'00
+  438 03D8 00000101           .BYTE  X'00,X'00,X'01,X'01,X'01,X'02,X'03,X'04
+  439 03E0 05060708           .BYTE  X'05,X'06,X'07,X'08,X'09,X'0B,X'0C,X'0D
+  440 03E8 0F101213           .BYTE  X'0F,X'10,X'12,X'13,X'15,X'16,X'18,X'1A
+  441 03F0 1B1D1F20           .BYTE  X'1B,X'1D,X'1F,X'20,X'22,X'23,X'25,X'27
+  442 03F8 282A2B2C           .BYTE  X'28,X'2A,X'2B,X'2C,X'2E,X'2F,X'30,X'31
+  443
+  444 0000                    END
+NO ERROR LINES

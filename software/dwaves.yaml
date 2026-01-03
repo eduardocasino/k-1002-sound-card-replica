@@ -1,0 +1,71 @@
+# Default waveforms 
+
+# Recreated from the manual for the MTU-130 Simplified Music Compiler/Player
+# and Chamberlin, H. (1980). Musical Applications of Microprocessors. Hayden Book Company.
+#
+# Normalized to a peak of 0x3F to avoid overflow
+
+# WAVE 1: Bright church organ timbre. Useful from C1 to C5
+#
+name: waveform1
+desc: Bright church organ timbre. Useful from C1 to C5
+segment: WAVE
+peak: 0x3F
+norm: True
+list:
+  - 0x0000    # DC
+  - 0x4000    # Fundamental
+  - 0x4000    # 2nd
+  - 0x0000    # 3rd
+  - 0x4000    # 4th
+  - 0x0000    # 5th
+  - 0x0000    # 6th
+  - 0x0000    # 7th
+  - 0x4000    # 8th
+---
+# WAVE 2: Mellow, flutey timbre. Useful from C1 to G5
+#
+name: waveform2
+desc: Mellow, flutey timbre. Useful from C1 to G5
+segment: WAVE
+peak: 0x3F
+norm: True
+list:
+  - 0x0000    # DC
+  - 0xB300    # Fundamental
+  - 0x0000    # 2nd
+  - 0x3380    # 3rd
+  - 0x0000    # 4th
+  - 0x1A00    # 5th
+---
+# WAVE 3: A thin reedy timbre. Useful from C1 to C5
+#
+name: waveform3
+desc: A thin reedy timbre. Useful from C1 to C5
+segment: WAVE
+peak: 0x3F
+norm: True
+list:
+  - 0x0000    # DC
+  - 0x2600    # Fundamental
+  - 0x1A00    # 2nd
+  - 0x1400    # 3rd
+  - 0x1400    # 4th
+  - 0x1A00    # 5th
+  - 0x3300    # 6th
+  - 0x2600    # 7th
+  - 0x1A00    # 8th
+---
+# WAVE 4: A full-bodied, robust sounding timbre. Useful from C1 to C6
+#
+name: waveform4
+desc: A full-bodied, robust sounding timbre. Useful from C1 to C6
+segment: WAVE
+peak: 0x3F
+norm: True
+list:
+  - 0x0000    # DC
+  - 0x6600    # Fundamental
+  - 0x4000    # 2nd
+  - 0x3300    # 3rd
+  - 0x2600    # 4th

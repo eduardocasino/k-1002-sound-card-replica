@@ -1,0 +1,517 @@
+   
+                              .PAGE  'DOCUMENTATION'
+    3                ;        COPYRIGHT 1977 BY MICRO TECHNOLOGY UNLIMITED, BOX 4596,
+    4                ;        MANCHESTER, NEW HAMPSHIRE 03108
+    5                ;        PROGRAM WRITTEN BY HAL CHAMBERLIN
+    6
+    7                ;        FOURIER SERIES EVALUATION PROGRAM FOR COMPUTING WAVEFORM TABLE
+    8                ;        CONTENTS FROM HARMONIC SPECIFICATIONS.
+    9
+   10                ;        ENTER AT SCALE TO COMPUTE ONE CYCLE OF A WAVEFORM SUITABLE FOR
+   11                ;        USE WITH EITHER THE SIMPLIFIED 4 VOICE MUSIC INTERPRETER, THE
+   12                ;        ADVANCED 4 VOICE MUSIC INTERPRETER, OR THE SIMPLIFIED SINGLE
+   13                ;        VOICE MUSIC INTERPRETER WITH EXPRESSION.  ENTER AT WAVE TO
+   14                ;        BYPASS SCALE FACTOR COMPUTATION (USER MUST SUPPLY SCALE FACTOR)
+   15
+   16                ;        THE "FOURIER SERIES SPECTRUM PARAMETERS" MUST BE SET TO
+   17                ;        APPROPRIATE VALUES BEFORE EXECUTING THE PROGRAM.
+   18
+   19                ;        WAVEAD   ADDRESS OF WAVEFORM TABLE TO FILL.  THE ROUTINE
+   20                ;                 COMPUTES 256 SAMPLES ON ONE CYCLE OF THE WAVEFORM AND
+   21                ;                 PLACES THEM IN MEMORY STARTING AT THE CONTENTS OF
+   22                ;                 WAVEAD.
+   23                ;        PKAMP    THE WAVEFORM RESULTING FROM THE FOURIER SERIES
+   24                ;                 EVALUATION IS NORMALIZED SUCH THAT THE NEGATIVE PEAK
+   25                ;                 IS EQUAL TO ZERO AND THE POSITIVE PEAK IS EQUAL TO
+   26                ;                 PKAMP.  NORMALIZATION CAN BE BYPASSED FOR NON-AUDIO
+   27                ;                 APPLICATIONS.
+   28                ;        NHARM    SET EQUAL TO THE HIGHEST HARMONIC TO GENERATE.  THE
+   29                ;                 ROUTINE WILL IGNORE FSRAM ENTRIES CORRESPONDING TO
+   30                ;                 HARMONICS HIGHER THAN NHARM AND THUS WILL RUN FASTER.
+   31                ;        FSRAM    A TABLE OF HARMONIC AMPLITUDES AND PHASES.  EACH
+   32                ;                 HARMONIC IS REPRESENTED BY A PAIR OF BYTES.  THE FIRST
+   33                ;                 BYTE OF THE PAIR IS THE AMPLITUDE OF THE CORRESPONDING
+   34                ;                 HARMONIC.  THIS IS AN UNSIGNED BINARY FRACTION; X'FF
+   35                ;                 IS MAXIMUM (.996), X'80 = .5, X'40 = .25, ETC.  THE
+   36                ;                 SECOND BYTE IS THE PHASE ANGLE OF THE CORRESPONDING
+   37                ;                 HARMONIC EXPRESSED AS AN UNSIGNED BINARY FRACTION
+   38                ;                 MULTIPLIED BY 2*PI RADIANS; 0 = NO PHASE SHIFT (COSINE
+   39                ;                 WAVE), X'40 = PI/2 RADIAN SHIFT = 90 DEGREES, ETC.
+   40                ;                 THE FIRST BYTE PAIR CORRESPONDS TO THE ZEROTH HARMONIC
+   41                ;                 (DC COMPONENT), NEXT PAIR TO THE FUNDAMENTAL, NEXT TO
+   42                ;                 THE SECOND HARMONIC, ETC.  NOTE THAT THE NORMALIZATION
+   43                ;                 PROCESS DESTROYS ANY EFFECT OF THE DC COMPONENT ON THE
+   44                ;                 RESULTING WAVEFORM.  IN NON-AUDIO APPLICATIONS
+   45                ;                 NORMALIZATION MAY BE BYPASSED AND THUS THE DC
+   46                ;                 COMPONENT WILL BE EFFECTIVE.  THE PHASE OF THE DC
+   47                ;                 COMPONENT SHOULD BE ZERO FOR THE EXPECTED RESULTS.
+   48
+   49                ;        NOTE THAT WHEN USING THIS PROGRAM TO COMPUTE WAVEFORMS FOR THE
+   50                ;        MUSIC PROGRAMS THAT THE HIGHEST NON-ZERO HARMONIC OF THE
+   51                ;        HIGHEST NOTE PLAYED BY A VOICE USING THE WAVEFORM SHOULD NOT BE
+   52                ;        GREATER THAN 4.5 TO 5.0 KHZ.  IF THIS CONDITION IS NOT MET, THE
+   53                ;        UPPER HARMONICS WILL ALIAS AND CREATE A VERY HARSH SOUND.  IN
+   54                ;        SYSTEMS WITH ADEQUATE MEMORY FOR SEPARATE WAVEFORM TABLES, THE
+   55                ;        LOWER REGISTER VOICES MAY BE SEPARATED FROM THE HIGHER REGISTER
+   56                ;        ONES AND GIVEN A RICHER HARMONIC SPECTRUM.
+   57
+   58                ;        NOTE THAT THIS PROGRAM CONTAINS SOME GENERALLY USEFUL
+   59                ;        ARITHMETIC SUBROUTINES FOR DOUBLE PRECISION MULTIPLY AND
+   60                ;        DIVIDE.
+   61
+                              .PAGE  'CONSTANTS AND DATA'
+   62 0000                    .=     0            ; KEEP ALL CONSTANTS AND DATA IN PAGE 0
+   63
+   64 1C22           KIMMON   =      X'1C22       ; ENTRY POINT TO KIM KEYBOARD MONITOR
+   65 0300           WAVETB   =      X'0300       ; ADDRESS OF WAVEFORM TABLE IN SIMPLIFIED
+   66                                             ; 4 VOICE MUSIC PROGRAM
+   67 1700           DAC      =      X'1700       ; OUTPUT PORT ADDRESS WITH DAC
+   68 1701           DACDIR   =      X'1701       ; DATA DRIECTION REGISTER FOR DAC PORT
+   69 1702           PTB      =      X'1702       ; PORT 8 ON APPLICATION CONNECTOR
+   70 1703           PTBDIR   =      X'1703       ; DATA DIRECTION REGISTER FOR PORT B
+   71
+   72                ;        STORAGE FOR THE ARITHMETIC SUBROUTINES
+   73
+   74 0000 00000000  PROD:    .WORD  0,0          ; PRODUCT/DIVIDEND FOR ARITHMETIC ROUTINES
+   75 0004 0000      MPCD:    .WORD  0            ; MUPTIPLICAND/DIVISOR FOR ARITHMETIC
+   76 0006 0000      MPSAVE:  .WORD  0            ; TEMPORARY STORAGE FOR MULTIPLY
+   77 0000           DVND     =      PROD         ; EQUATES FOR DIVISON ROUTINES
+   78 0004           DVSR     =      MPCD
+   79
+   80                ;        STORAGE FOR THE FOURIER SERIES EVALUATION
+   81
+   82 0008 0000      HRMACC:  .WORD  0            ; HARMONIC ACCUMULATOR
+   83 000A 00        PNTNO:   .BYTE  0            ; POINT NUMBER WITHIN CYCLE OF WAVE
+   84 000B 00        NDXACC:  .BYTE  0            ; INDEXING ACCUMULATOR
+   85 000C 00        HRMCNT:  .BYTE  0            ; HARMONIC COUNTER
+   86 000D 0000      MAX:     .WORD  0            ; MAXIMUM WAVEFORM AMPLITUDE
+   87 000F 0000      MIN:     .WORD  0            ; MINIMUM WAVEFORM AMPLITUDE
+   88 0011 0000      SCALEF:  .WORD  0            ; SCALE FACTOR FOR AMPLITUDE NORMALIZATION
+   89
+   90                ;        FOURIER SERIES SPECTRUM PARAMETERS
+   91
+   92 0013 0003      WAVEAD:  .WORD  WAVETB       ; ADDRESS OF WAVEFORM TABLE TO FILL
+   93 0015 3F        PKAMP:   .BYTE  X'3F         ; DESIRED PEAK AMPLITUDE OF WAVEFORM
+   94 0016 10        NHARM:   .BYTE  16           ; HIGHEST HARMONIC TO GENERATE (16 IS MAX)
+   95                                             ; EXAMPLE SPECTRUM OF A SAWTOOTH WAVE
+   96                                             ; ALTER AFTER LOADING FOR OTHER WAVEFORMS
+   97 0017 0000      FSRAM:   .BYTE  0,0          ; DC COMPONENT
+   98 0019 FF40               .BYTE  255,X'40     ; FUNDAMENTAL
+   99 001B 7F40               .BYTE  255/2,X'40   ; 2ND HARMONIC
+  100 001D 5540               .BYTE  255/3,X'40   ; 3RD HARMONIC
+  101 001F 3F40               .BYTE  255/4,X'40   ; 4TH HARMONIC
+  102 0021 3340               .BYTE  255/5,X'40   ; 5TH HARMONIC
+  103 0023 2A40               .BYTE  255/6,X'40   ; 6TH HARMONIC
+  104 0025 2440               .BYTE  255/7,X'40   ; 7TH HARMONIC
+  105 0027 1F40               .BYTE  255/8,X'40   ; 8TH HARMONIC
+  106 0029 1C40               .BYTE  255/9,X'40   ; 9TH HARMONIC
+  107 002B 1940               .BYTE  255/10,X'40  ; 10TH HARMONIC
+  108 002D 1740               .BYTE  255/11,X'40  ; 11TH HARMONIC
+  109 002F 1540               .BYTE  255/12,X'40  ; 12TH HARMONIC
+  110 0031 1340               .BYTE  255/13,X'40  ; 13TH HARMONIC
+  111 0033 1240               .BYTE  255/14,X'40  ; 14TH HARMONIC
+  112 0035 1140               .BYTE  255/15,X'40  ; 15TH HARMONIC
+  113 0037 0F40               .BYTE  255/16,X'40  ; 16TH HARMONIC
+  114
+                              .PAGE  'MAIN WAVEFORM COMPUTATION ROUTINE'
+  115                ;        THIS PROGRAM FIRST HAS A FULL CYCLE OF THE WAVEFORM COMPUTED IN
+  116                ;        ORDER TO DETERMINE THE POSITIVE AND NEGATIVE PEAK VALUES.
+  117                ;        THEN IT COMPUTES THE WAVEFORM AGAIN SAMPLE-BY-SAMPLE AND
+  118                ;        NORMALIZES THE AMPLITUDE TO BE BETWEEN 0 AND "PKAMP".
+  119                ;        EACH NORMALIZED SAMPLE IS THEN PLACED INTO A TABLE STARTING AT
+  120                ;        THE ADDRESS IN WAVEAD.  FINALLY, THE TABLE'S CONTENTS ARE
+  121                ;        SCANNED AND SENT TO THE DIGITAL-TO-ANALOG CONVERTER FOR
+  122                ;        MONITORING.
+  123
+  124                ;        SCALE FACTOR DETERMINATION ROUTINE
+  125                ;        THIS ROUTINE GOES THROUGH ONE CYCLE OF THE WAVEFORM DEFINED
+  126                ;        BY THE SPECTRUM AT FSRAM AND FINDS THE MOST POSITIVE POINT AND
+  127                ;        PUTS IT IN MAX AND FINDS THE MOST NEGATIVE POINT AND PUTS IT IN
+  128                ;        MIN.   MAX AND MIN ARE DOUBLE PRECISION SIGNED NUMBERS
+  129
+  130 0039 A900      SCALE:   LDA    #0           ; ZERO THE POINT NUMBER
+  131 003B 850A               STA    PNTNO
+  132 003D 8510               STA    MIN+1
+  133 003F 850E               STA    MAX+1
+  134 0041 A9C0               LDA    #X'C0        ; SET MAX TO C000 (TO AVOID OVERFLOW WHEN
+  135 0043 850D               STA    MAX          ; COMPARING)
+  136 0045 A940               LDA    #X'40        ; SET MIN TO 4000 (TO AVOID OVERFLOW WHEN
+  137 0047 850F               STA    MIN          ; COMPARING)
+  138 0049 200001    SCALE1:  JSR    FSEVAL       ; EVALUATE A WAVEFORM POINT
+  139 004C A608               LDX    HRMACC       ; GET WAVEFORM POINT INTO X AND Y
+  140 004E A409               LDY    HRMACC+1
+  141 0050 E400               CPX    MAX          ; COMPARE WITH MAX
+  142 0052 300A               BMI    SCALE3       ; JUMP IF DEFINITELY LESS THAN MAX
+  143 0054 D004               BNE    SCALE2       ; JUMP IF DEFINITELY GREATER THAN MAX
+  144 0056 C40E               CPY    MAX+1        ; COMPARE LOW BYTES IF HIGH BYTES EQUAL
+  145 0058 9004               BCC    SCALE3       ; JUMP IF LESS THAN MAX
+  146 005A 860D      SCALE2:  STX    MAX          ; UPDATE MAX IF EQUAL OR GREATER
+  147 005C 840E               STY    MAX+1
+  148 005E E40F      SCALE3:  CPX    MIN          ; COMPARE WITH MIN
+  149 0060 3006               BMI    SCALE4       ; JUMP IF DEFINITELY LESS THAN MIN
+  150 0062 D008               BNE    SCALE5       ; JUMP IF DEFINITELY GREATER THAN MIN
+  151 0064 C410               CPY    MIN+1        ; COMPARE LOW BYTES IF HIGH BYTES EQUAL
+  152 0066 8004               BCS    SCALE5       ; JUMP IF GREATER THAN MIN
+  153 0068 860F      SCALE4:  STX    MIN          ; UPDATE MIN IF EQUAL OR LESS
+  154 006A 8410               STY    MIN+1
+  155 006C E60A      SCALE5:  INC    PNTNO        ; INCREMENT POINT NUMBER
+  156 006E D0D9               BNE    SCALE1       ; GO FOR NEXT POINT IF NOT DONE
+  157
+  158                ;        DETERMINE THE SCALE FACTOR,   SCALEF=PKAMP/(MAX-MIN)
+  159
+  160 0070 A50E               LDA    MAX+1        ; COMPUTE MAX-MIN AND PUT INTO DIVISOR
+  161 0072 38                 SEC
+  162 0073 E510               SBC    MIN+1
+  163 0075 8505               STA    DVSR+1
+  164 0077 A50D               LDA    MAX
+  165 0079 E50F               SBC    MIN
+  166 007B 8504               STA    DVSR
+  167 007D A515               LDA    PKAMP        ; PUT PKAMP INTO DIVIDEND, NEXT TO MOST
+  168 007F 8501               STA    DVND+1       ; SIGNIFICANT BYTE
+  169 0081 A900               LDA    #0           ; ZERO THE OTHER DIVIDEND BYTES
+  170 0083 8500               STA    DVND
+  171 0085 8502               STA    DVND+2
+  172 0087 8503               STA    DVND+3
+  173 0089 206A02             JSR    SGNDIV       ; DO THE DIVISON
+  174 008C A502               LDA    DVND+2       ; MOVE THE QUOTIENT TO THE SCALE FACTOR
+  175 008E 8511               STA    SCALEF
+  176 0090 A503               LDA    DVND+3
+  177 0092 8512               STA    SCALEF+1
+  178
+  179                ;        GENERATE THE WAVEFORM POINTS, SCALE THEM, AND PUT THEM IN THE
+  180                ;        WAVEFORM TABLE
+  181
+  182 0094 A900      WAVE:    LDA    #0           ; ZERO THE POINT NUMBER
+  183 0096 850A               STA    PNTNO
+  184 0098 A8                 TAY                 ; ZERO THE WAVEFORM TABLE INDEX
+  185 0099 200001    WAVE1:   JSR    FSEVAL       ; EVALUATE A WAVEFORM POINT
+  186 009C A509               LDA    HRMACC+1     ; SUBTRACT MIN FROM THE POINT AND PLACE IT
+  187 009E 38                 SEC                 ; IN THE MULTIPLIER
+  188 009F E510               SBC    MIN+1
+  189 00A1 8503               STA    PROD+3
+  190 00A3 A511               LDA    SCALEF       ; MULTIPLY BY THE SCALE FACTOR COMPUTED
+  191 00A5 8504               STA    MPCD         ; EARLIER
+  192 00A7 A512               LDA    SCALEF+1
+  193 00A9 8505               STA    MPCD+1
+  194 00AB A508               LDA    HRMACC
+  195 00AD E50F               SBC    MIN
+  196 00AF 8502               STA    PROD+2
+  197 00B1 200002             JSR    SGNMPY
+  198 00B4 A501               LDA    PROD+1       ; GET SCALED, POSITIVE RESULT
+  199 00B6 9113               STA    (WAVEAD),Y   ; PUT IT INTO THE WAVEFORM TABLE
+  200 00B8 E60A               INC    PNTNO        ; INCREMENT POINT NUMBER
+  201 00BA C8                 INY                 ; INCREMENT WAVE TABLE POINTER
+  202 00BB D0DC               BNE    WAVE1        ; GO FOR ANOTHER POINT IF NOT FINISHED
+  203
+  204                ;        WAVEFORM PLAYOUT FOR MONITORING
+  205                ;        THIS ROUTINE CONTINUOUSLY SCANS THE WAVEFORM TABLE JUST
+  206                ;        COMPUTED AND OUTPUTS THE WAVEFORM AT A SAMPLE RATE OF 8770 HZ,
+  207                ;        THE SAME AS THE MUSIC PROGRAMS.  FUNDAMENTAL FREQUENCY IS 34 HZ
+  208                ;        IT ALSO PULSES PORT B BIT 7 AT THE START OF EVERY CYCLE TO
+  209                ;        SYNCHRONIZE A STANDARD OSCILLOSCOPE FOR WAVEFORM DISPLAY.
+  210                ;        NOTE THAT PORT B BIT 7 IS PIN 15 ON THE APPLICATION CONNECTOR
+  211                ;        AND THAT IT REQUIRES A 4.7K OHM PULLUP RESISTOR TO +5 TO WORK.
+  212
+  213 00BD AD0317    MONTOR:  LDA    PTBDIR       ; SET PORT B BIT 7 UP AS AN OUTPUT
+  214 00C0 0980               ORA    #X'80
+  215 00C2 8D0317             STA    PTBDIR
+  216 00C5 A9FF               LDA    #X'FF        ; SET UP THE DAC PORT AS AN OUTPUT
+  217 00C7 8D0117             STA    DACDIR
+  218 00CA AD0217    MONT1:   LDA    PTB          ; PULSE PORT B BIT 7
+  219 00CD 0980               ORA    #X'80
+  220 00CF 8D0217             STA    PTB
+  221 00D2 297F               AND    #X'7F
+  222 00D4 8D0217             STA    PTB
+  223 00D7 A000               LDY    #0           ; INITIALIZE WAVEFORM TABLE POINTER
+  224 00D9 B113      MONT2:   LDA    (WAVEAD),Y   ; GET A SAMPLE FROM THE WAVEFORM TABLE
+  225 00DB 8D0017             STA    DAC          ; SEND IT TO THE DAC
+  226 00DE C8                 INY                 ; BUMP POINTER TO NEXT SAMPLE
+  227 00DF F007               BEQ    MONT4        ; JUMP IF FINISHED WITH CYCLE
+  228 00E1 A213               LDX    #19          ; WASTE SOME TIME TO GET LOOP TIME OF 114
+  229 00E3 CA        MONT3:   DEX                 ; STATES
+  230 00E4 D0FD               BNE    MONT3
+  231 00E6 F0F1               BEQ    MONT2        ; GO FOR NEXT SAMPLE
+  232 00E8 A20F      MONT4:   LDX    #15          ; WASTE LESS TIME TO ACCOUNT FOR OVERHEAD
+  233 00EA CA        MONT5:   DEX                 ; IN GENERATING THE SYNC PULSE
+  234 00EB D0FD               BNE    MONT5
+  235 00ED F0DB               BEQ    MONT1        ; GO START ANOTHER WAVEFORM CYCLE
+  236
+                              .PAGE  'FOURIER SERIES POINT EVALUATOR'
+  237                ;        THIS SUBROUTINE EVALUATES A POINT ON THE WAVEFORM SPECIFIED BY
+  238                ;        THE SPECTRUM AT FSRAM.
+  239                ;        NHARM SPECIFIES THE HIGHEST HARMONIC TO BE INCLUDED
+  240                ;        PNTNO IS THE POINT NUMBER TO BE EVALUATED
+  241                ;        THE COMPUTED POINT IS RETURNED IN IN HRMACC AS A 16 BIT TWOS
+  242                ;        COMPLEMENT NUMBER
+  243                ;        DESTROYS A, SAVES INDEX REGISTERS, USES ARITHMETIC SUBROUTINES
+  244
+  245 00EF                    .=     X'100        ; START FOURIER SERIES ROUTINES AT 100
+  246
+  247 0100 8A        FSEVAL:  TXA                 ; SAVE INDEX X
+  248 0101 48                 PHA
+  249 0102 A900               LDA    #0           ; CLEAR HARMONIC ACCUMULATOR
+  250 0104 8508               STA    HRMACC
+  251 0106 8509               STA    HRMACC+1
+  252 0108 850C               STA    HRMCNT       ; ZERO HARMONIC COUNTER
+  253 010A 850B               STA    NDXACC       ; ZERO THE INDEXING ACCUMULATOR
+  254 010C A50C      FSEV1:   LDA    HRMCNT       ; GET CURRENT HARMONIC NUMBER AND DOUBLE IT
+  255 010E 0A                 ASLA
+  256 010F AA                 TAX                 ; USE AS AN INDEX TO THE SPECTRUM TABLE
+  257 0110 B517               LDA    FSRAM,X      ; GET AMPLITUDE
+  258 0112 8503               STA    PROD+3       ; SAVE AS MULTIPLIER
+  259 0114 B518               LDA    FSRAM+1,X    ; GET PHASE
+  260 0116 650B               ADC    NDXACC       ; ADD IT TO THE INDEXING ACCUMULATOR
+  261 0118 205001             JSR    COSINE       ; GET COSINE
+  262 011B 8504               STA    MPCD         ; SAVE AS MULTIPLICAND
+  263 011D A900               LDA    #0           ; ZERO UNUSED BYTES IN MULTIPLIER AND
+  264 011F 8502               STA    PROD+2       ; MULTIPLICAND
+  265 0121 8505               STA    MPCD+1
+  266 0123 200002             JSR    SGNMPY       ; MULTIPLY AMPLITUDE BY COSINE
+  267 0126 A205               LDX    #5           ; SHIFT PRODUCT RIGHT 5 FOR 11 BIT RESULT
+  268 0128 205402    FSEV2:   JSR    SRQA         ; RIGHT JUSTIFIED IN PROD+1 AND PROD+2
+  269 012B CA                 DEX
+  270 012C D0FA               BNE    FSEV2
+  271 012E 18                 CLD                 ; ADD RESULT TO HARMONIC ACCUMULATOR
+  272 012F A509               LDA    HRMACC+1
+  273 0131 6502               ADC    PROD+2
+  274 0133 8509               STA    HRMACC+1
+  275 0135 A508               LDA    HRMACC
+  276 0137 6501               ADC    PROD+1
+  277 0139 8508               STA    HRMACC
+  278 013B A50C               LDA    HRMCNT       ; TEST IF CURRENT HARMONIC IS LAST ONE TO
+  279 013D C516               CMP    NHARM        ; INCLUDE
+  280 013F F00C               BEQ    FSEV3        ; GO RETURN IF SO
+  281 0141 E60C               INC    HRMCNT       ; INCREMENT TO NEXT HARMONIC
+  282 0143 A50A               LDA    PNTNO        ; ADD POINT NUMBER TO THE INDEXING
+  283 0145 18                 CLC                 ; ACCUMULATOR
+  284 0146 6508               ADC    NDXACC
+  285 0148 850B               STA    NDXACC
+  286 014A 4C0C01             JMP    FSEV1        ; LOOP FOR ANOTHER HARMONIC
+  287 014D 68        FSEV3:   PLA                 ; RESTORE INDEX X
+  288 014E AA                 TAX
+  289 014F 60                 RTS                 ; RETURN
+  290
+                              .PAGE  'COSINE CALCULATE ROUTINE'
+  291                ;        ENTER WITH ARGUMENT IN A, 0=0 DEGREES, 64=90 DEGREES, ETC.
+  292                ;        EXIT WITH SIGNED COSINE IN A
+  293                ;        DESTROYS INDEX X
+  294
+  295 0150 C940      COSINE:  CMP    #X'40
+  296 0152 900B               BCC    QUAD1        ; BRANCH IF IN QUADRANT 1
+  297 0154 C980               CMP    #X'80
+  298 0156 900C               BCC    QUAD2        ; BRANCH IF IN QUADRANT 2
+  299 0158 C9C0               CMP    #X'C0
+  300 015A 9013               BCC    QUAD3        ; BRANCH IF IN QUADRANT 3
+  301 015C 207301    QUAD4:   JSR    ANGNEG       ; IN QUADRANT 4, NEGATE THE ANGLE
+  302 015F AA        QUAD1:   TAX                 ; IN QUADRANT 1, LEAVE ANGLE ALONE
+  303 0160 BD7B01             LDA    COSTAB,X     ; GET COSINE IN QUADRANTS 1 AND 4
+  304 0163 60                 RTS                 ; RETURN
+  305 0164 207301    QUAD2:   JSR    ANGNEG       ; IN QUADRANT 2 NEGATE THE ANGLE
+  306 0167 AA        COS1:    TAX
+  307 0168 A900               LDA    #0
+  308 016A 38                 SEC
+  309 016B FD7B01             SBC    COSTAB,X     ; GET -COSINE IN QUADRANTS 2 AND 3
+  310 016E 60                 RTS                 ; RETURN
+  311 016F 293F      QUAD3:   AND    #X'3F        ; IN QUADRANT 3 MASK THE ANGLE TO CONVERT
+  312 0171 90F4               BCC    COS1         ; TO QUADRANT 1 ANGLE
+  313
+  314
+  315 0173 293F      ANGNEG:  AND    #X'3F        ; ISOLATE THE LOWER 6 BITS OF THE ANGLE
+  316 0175 493F               EOR    #X'3F        ; FLIP THEM
+  317 0177 18                 CLC                 ; ADD 1 FOR TWOS COMPLEMENT
+  318 0178 6901               ADC    #1
+  319 017A 60                 RTS                 ; RETURN
+  320
+  321
+  322                ;        65 POINT COSINE TABLE, QUADRANT 1
+  323
+  324 017B 7F7F7F7F  COSTAB:  .BYTE  X'7F,X'7F,X'7F,X'7F,X'7F,X'7F,X'7E,X'7E
+  325 0183 7D7D7C7B           .BYTE  X'7D,X'7D,X'7C,X'7B,X'7A,X'79,X'78,X'77
+  326 018B 76757372           .BYTE  X'76,X'75,X'73,X'72,X'71,X'6F,X'6D,X'6C
+  327 0193 6A686665           .BYTE  X'6A,X'68,X'66,X'65,X'63,X'61,X'5E,X'5C
+  328 0198 5A585653           .BYTE  X'5A,X'58,X'56,X'53,X'51,X'4E,X'4C,X'49
+  329 01A3 4744413F           .BYTE  X'47,X'44,X'41,X'3F,X'3C,X'39,X'36,X'33
+  330 01AB 312E2828           .BYTE  X'31,X'2E,X'2B,X'28,X'25,X'22,X'1F,X'1C
+  331 01B3 1916120F           .BYTE  X'19,X'16,X'12,X'0F,X'0C,X'09,X'06,X'03
+  332 01BB 00                 .BYTE  X'00
+  333
+                              .PAGE  'MULTIPLY ROUTINES'
+  334                ;        SIGNED MULTIPLY SUBROUTINE
+  335                ;        ENTER WITH SIGNED MULTIPLIER IN PROD+2 AND PROD+3
+  336                ;        ENTER WITH SIGNED MULTIPLICAND IN MPCD AND MPCD+1
+  337                ;        RETURN WITH 16 BIT SIGNED PRODUCT IN PROD (HIGH) THROUGH
+  338                ;        PROD+3 (LOW)
+  339                ;        A DESTROYED, X AND Y PRESERVED
+  340
+  341 01BC                    .=     X'0200       ; PUT MATH ROUTINES AT 200
+  342
+  343 0200 A502      SGNMPY:  LDA    PROD+2       ; GET MULTIPLIER
+  344 0202 8506               STA    MPSAVE       ; AND SAVE IT
+  345 0204 A503               LDA    PROD+3
+  346 0206 8507               STA    MPSAVE+1
+  347 0208 202E02             JSR    UNSMPY       ; DO AN UNSIGNED MULTIPLY
+  348 020B A504               LDA    MPCD         ; TEST SIGN OF MULTIPLICAND
+  349 020D 100D               BPL    SGNMP1       ; JUMP IF POSITIVE
+  350 020F A501               LDA    PROD+1       ; SUBTRACT MULTIPLIER FROM HIGH PRODUCT IF
+  351 0211 38                 SEC                 ; NEGATIVE
+  352 0212 E507               SBC    MPSAVE+1
+  353 0214 8501               STA    PROD+1
+  354 0216 A500               LDA    PROD
+  355 0218 E506               SBC    MPSAVE
+  356 021A 8500               STA    PROD
+  357 021C A506      SGNMP1:  LDA    MPSAVE       ; TEST SIGN OF MULTIPLIER
+  358 021E 100D               BPL    SGNMP2       ; GO RETURN IF POSITIVE
+  359 0220 A501               LDA    PROD+1       ; SUBTRACT MULTIPLICAND FROM HIGH PRODUCT
+  360 0222 38                 SEC                 ; IF NEGATIVE
+  361 0223 E505               SBC    MPCD+1
+  362 0225 8501               STA    PROD+1
+  363 0227 A500               LDA    PROD
+  364 0229 E504               SBC    MPCD
+  365 022B 8500               STA    PROD
+  366 022D 60        SGNMP2:  RTS                 ; RETURN
+  367
+  368                ;        16 X 16 UNSIGNED MULTIPLY SUBROUTINE
+  369                ;        ENTER WITH UNSIGNED MULTIPLIER IN PROD+2 AND PROD+3
+  370                ;        ENTER WITH UNSIGNED MULTIPLICAND IN MPCD AND MPCD+1
+  371                ;        RETURN WITH 16 BIT UNSIGNED PRODUCT IN PROD (HIGH) THROUGH
+  372                ;        PROD+3 (LOW)
+  373                ;        A DESTROYED, X AND Y PRESERVED
+  374
+  375 022E 8A        UNSMPY:  TXA                 ; SAVE X INDEX
+  376 022F 48                 PHA
+  377 0230 A900               LDA    #0           ; CLEAR UPPER PRODUCT
+  378 0232 8500               STA    PROD
+  379 0234 8501               STA    PROD+1
+  380 0236 A211               LDX    #17          ; SET 17 MULTIPLY CYCLE COUNT
+  381 0238 18                 CLC                 ; INITIALLY CLEAR CARRY
+  382 0239 205702    UNSM1:   JSR    SRQL         ; SHIFT MULTIPLIER AND PRODUCT RIGHT 1
+  383                                             ; PUTTING A MULTIPLIER BIT IN CARRY
+  384 023C CA                 DEX                 ; DECREMENT AND CHECK CYCLE COUNT
+  385 023D F012               BEQ    UNSM2        ; JUMP OUT IF DONE
+  386 023F 90F8               BCC    UNSM1        ; SKIP MULTIPLICAND ADD IF MULTIPLIER BIT
+  387                                             ; IS ZERO
+  388 0241 A501               LDA    PROD+1       ; ADD MULTIPLICAND TO UPPER PRODUCT
+  389 0243 18                 CLC
+  390 0244 6505               ADC    MPCD+1
+  391 0246 8501               STA    PROD+1
+  392 0248 A500               LDA    PROD
+  393 024A 6504               ADC    MPCD
+  394 024C 8500               STA    PROD
+  395 024E 4C3902             JMP    UNSM1        ; GO FOR NEXT CYCLE
+  396 0251 68        UNSM2:   PLA                 ; RESTORE X
+  397 0252 AA                 TAX
+  398 0253 60                 RTS                 ; RETURN
+  399
+                              .PAGE  'QUAD PRECISION SHIFT ROUTINES'
+  400                ;        QUAD SHIFT RIGHT SUBROUTINE
+  401                ;        ENTER AT SRQA FOR ALGEBRAIC SHIFT RIGHT
+  402                ;        ENTER AT SRQL FOR LOGICAL SHIFT
+  403                ;        ENTER WITH QUAD PRECISION VALUE TO SHIFT IN PROD THROUGH PROD+3
+  404                ;        DESTROYS A, PRESERVES X AND Y, RETURNS BIT SHIFTED OUT IN CARRY
+  405
+  406 0254 A500      SRQA:    LDA    PROD         ; GET SIGN BIT OF PROD IN CARRY
+  407 0256 0A                 ASLA
+  408 0257 6600      SRQL:    ROR    PROD         ; LOGICAL SHIFT RIGHT ENTRY
+  409 0259 6601               ROR    PROD+1
+  410 025B 6602               ROR    PROD+2
+  411 025D 6603               ROR    PROD+3
+  412 025F 60                 RTS                 ; RETURN
+  413
+  414
+  415                ;        QUAD SHIFT LEFT SUBROUTINE
+  416                ;        ENTER AT SLQL TO SHIFT IN A ZERO BIT
+  417                ;        ENTER AT RLQL TO SHIFT IN THE CARRY
+  418                ;        ENTER WITH QUAD PRECISION VALUE TO SHIFT IN PROD THROUGH PROD+3
+  419                ;        DESTROYS A, PRESERVES X AND Y, RETURNS BIT SHIFTED OUT IN CARRY
+  420
+  421 0260 18        SLQL:    CLC                 ; SHIFT IN ZERO BIT ENTRY; CLEAR CARRY
+  422 0261 2603      RLQL:    ROL    PROD+3       ; SHIFT IN CARRY ENTRY
+  423 0263 2602               ROL    PROD+2
+  424 0265 2601               ROL    PROD+1
+  425 0267 2600               ROL    PROD
+  426 0269 60                 RTS                 ; RETURN
+  427
+                              .PAGE  'DIVIDE ROUTINES'
+  428                ;        DOUBLE PRECISION SIGNED DIVIDE SUBROUTINE
+  429                ;        ENTER WITH SIGNED DIVIDEND IN DVND (HIGH) THROUGH DVND+3 (LOW)
+  430                ;        ENTER WITH SIGNED DIVISOR IN DVSR AND DVSR+1
+  431                ;        EXIT WITH SIGNED QUOTIENT IN DVND+2 AND DVND+3 AND SIGNED
+  432                ;        REMAINDER TIMES 2 IN DVND AND DVND+1
+  433                ;        DESTROYS A, PRESERVES INDEX REGISTERS
+  434                ;        NO CHECK FOR OVERFLOW OR DIVIDE BY 0
+  435
+  436 026A 8A        SGNDIV:  TXA                 ; SAVE THE INDEX REGISTERS
+  437 026B 48                 PHA
+  438 026C 98                 TYA
+  439 026D 48                 PHA
+  440 026E A500      SDIV:    LDA    DVND         ; COMPUTE SIGN OF QUOTIENT
+  441 0270 4504               EOR    DVSR
+  442 0272 8506               STA    MPSAVE       ; SAVE IT
+  443 0274 A504               LDA    DVSR         ; ABSOLUTE VALUE OF DIVISOR
+  444 0276 1007               BPL    SDIV1        ; BRANCH IF POSITIVE
+  445 0278 A205               LDX    #DVSR+1-DVND ; NEGATE IF NEGATIVE
+  446 027A A002               LDY    #2
+  447 027C 209D02             JSR    MPNEG
+  448 027F A500      SDIV1:   LDA    DVND         ; ABSOLUTE VALUE OF DIVIDEND
+  449 0281 1007               BPL    SDIV2        ; JUMP IF POSITIVE
+  450 0283 A203               LDX    #DVND+3-DVND ; NEGATE IF NEGATIVE
+  451 0285 A004               LDY    #4
+  452 0287 209D02             JSR    MPNEG
+  453 028A 20A902    SDIV2:   JSR    UNSDIV       ; DO AN UNSIGNED DIVIDE
+  454 028D A506               LDA    MPSAVE       ; GET SIGN OF QUOTIENT
+  455 028F 1007               BPL    SDIV3        ; GO RETURN IF POSITIVE
+  456 0291 A203               LDX    #DVND+3-DVND ; NEGATE IF NEGATIVE
+  457 0293 A002               LDY    #2
+  458 0295 209D02             JSR    MPNEG
+  459 0298 68        SDIV3:   PLA                 ; RESTORE INDEX REGISTERS
+  460 0299 A8                 TAY
+  461 029A 68                 PLA
+  462 029B AA                 TAX
+  463 029C 60                 RTS                 ; RETURN
+  464
+  465
+  466 029D 38        MPNEG:   SEC                 ; INITIALLY SET CARRY
+  467 029E A900      MPNEG1:  LDA    #0           ; SUBTRACT A BYTE FROM 0 TO NEGATE IT
+  468 02A0 F500               SBC    DVND,X
+  469 02A2 9500               STA    DVND,X
+  470 02A4 CA                 DEX                 ; BUMP TO NEXT MORE SIGNIFICANT BYTE
+  471 02A5 88                 DEY                 ; CHECK BYTE COUNT
+  472 02A6 D0F6               BNE    MPNEG1       ; LOOP IF NOT DONE
+  473 02A8 60                 RTS                 ; RETURN IF DONE
+  474
+  475                ;        DOUBLE PRECISION UNSIGNED DIVIDE SUBROUTINE
+  476                ;        ENTER WITH UNSIGNED DIVIDEND IN PROD (HIGH) THROUGH PROD+3 (LOW
+  477                ;        ENTER WITH UNSIGNED DIVISOR IN MPCD AND MPCD+1
+  478                ;        EXIT WITH UNSIGNED QUOTIENT IN PROD+2 AND PROD+3 AND UNSIGNED
+  479                ;        REMAINDER TIMES 2 IN PROD AND PROD+1 AND CARRY FLAG
+  480                ;        DESTROYS A, PRESERVES INDEX REGISTERS
+  481                ;        NO CHECK FOR OVERFLOW OR DIVIDE BY 0
+  482
+  483 02A9 8A        UNSDIV:  TXA                 ; SAVE X
+  484 02AA 48                 PHA
+  485 02AB 98                 TYA                 ; SAVE Y
+  486 02AC 48                 PHA
+  487 02AD A211               LDX    #17          ; SET DIVIDE CYCLE COUNT
+  488 02AF 18                 CLC                 ; INITIALLY CLEAR CARRY
+  489 02B0 A501      UNSDV1:  LDA    PROD+1       ; SUBTRACT DIVISOR FROM HIGH DIVIDEND
+  490 02B2 38                 SEC
+  491 02B3 E505               SBC    MPCD+1
+  492 02B5 AB                 TAY
+  493 02B6 A500               LDA    PROD
+  494 02B8 E504               SBC    MPCD
+  495 02BA 9005               BCC    UNSDV2       ; SKIP IF OVERDRAW
+  496 02BC 8500               STA    PROD         ; UPDATE HIGH DIVIDEND IF NOT
+  497 02BE 98                 TYA
+  498 02BF 8501               STA    PROD+1
+  499 02C1 206102    UNSDV2:  JSR    RLQL         ; SHIFT DIVIDEND LEFT 1 BRINGING IN
+  500                                             ; QUOTIENT BIT
+  501 02C4 CA                 DEX                 ; DECREMENT CYCLE COUNT
+  502 02C5 D0E9               BNE    UNSDV1       ; LOOP IF NOT DONE
+  503 02C7 68                 PLA                 ; RESTORE Y
+  504 02C8 A8                 TAY
+  505 02C9 68                 PLA                 ; RESTORE X
+  506 02CA AA                 TAX
+  507 02CB 60                 RTS                 ; RETURN
+  508
+  509 0000                    .END
+NO ERROR LINES
