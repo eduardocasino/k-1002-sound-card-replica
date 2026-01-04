@@ -23,7 +23,7 @@ There’s nothing particularly special about assembling the board. As with any o
 There’s a BOM spreadsheet in the `card/docs` folder, but there are a few things to keep in mind regarding some of the components:
 
 * R1 to R13 are 51K resistors that need to be matched within 1%. You can either use modern metal‑film resistors with that tolerance or manually match carbon ones. I went with the latter to keep the look closer to the original.
-Also, the documentation isn’t very clear about whether &plusmn;% is actually enough or if it really means &plusmn;0.5% (so that all resistors fall within a 1% spread). I chose the latter interpretation as well.
+Also, the documentation isn’t very clear about whether &plusmn;1% is actually enough or if it really means &plusmn;0.5% (so that all resistors fall within a 1% spread). I chose the latter interpretation as well.
 
 * The 92PU01 and 92PU51 transistors are no longer available. The BD135‑10 and BD136‑10 are perfectly good functional replacements, but they use a different package and footprint, so you’ll need to bend the leads to fit them on the board.
  **NOTE**: They *must* be the "-10" variants!!
