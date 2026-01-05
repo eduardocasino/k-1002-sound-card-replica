@@ -30,6 +30,7 @@ Also, the documentation isn’t very clear about whether &plusmn;1% is actually 
 
 * The original potentiometer is no longer manufactured. A drop‑in replacement is the Piher PT15NH06 with the adjustment wheel. **NOTE**: Make sure you get the NH06 variant.
 
+* The Keystone 571 RCA connector is no longer manufactured. Some suppliers may still have remaining stock, such as [TME](https://tme.eu) in Europe.
 
 ## KIM-1 Software and PC Utilities
 
